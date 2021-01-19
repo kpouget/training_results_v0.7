@@ -1,3 +1,5 @@
+#! /usr/bin/python3
+# https://github.com/mlperf/training_results_v0.7/blob/master/NVIDIA/benchmarks/maskrcnn/implementations/pytorch/bind_launch.py
 import sys
 import subprocess
 import os
@@ -78,6 +80,25 @@ def main():
 
     processes = []
 
+    try:
+        slicing = subprocess.check_output("nvidia-smi -L", shell=True)
+
+    except subprocess.CalledProcessError:
+        print("Failed to call 'nvidia-smi -L', using dummy list")
+
+        slicing = """GPU 0: A100-PCIE-40GB (UUID: GPU-d9322296-54da-ce5a-6330-3ca7707e0c5d)
+  MIG 4g.20gb Device 0: (UUID: MIG-GPU-d9322296-54da-ce5a-6330-3ca7707e0c5d/1/0)
+  MIG 2g.10gb Device 1: (UUID: MIG-GPU-d9322296-54da-ce5a-6330-3ca7707e0c5d/5/0)
+  MIG 1g.5gb Device 2: (UUID: MIG-GPU-d9322296-54da-ce5a-6330-3ca7707e0c5d/13/0)
+"""
+
+    mig_uids = [l.split("UUID: ")[1][:-1] for l in slicing.split("\n") if "MIG" in l]
+
+    if args.nproc_per_node != len(mig_uids):
+        print(f"Got --nproc_per_node={args.nproc_per_node} and {len(mig_uids)} MIG devices ...")
+        print(slicing)
+        exit(1)
+
     for local_rank in range(0, args.nproc_per_node):
         # each process's rank
         dist_rank = args.nproc_per_node * args.node_rank + local_rank
@@ -105,12 +126,14 @@ def main():
             numactlargs += [ "--membind={}".format(memnode) ]
 
         # spawn the processes
-        cmd = [ "/usr/bin/numactl" ] \
+        cmd = [ #"echo",
+                "/usr/bin/env", "CUDA_VISIBLE_DEVICES", mig_uids[local_rank],
+                "/usr/bin/numactl" ] \
             + numactlargs \
             + [ sys.executable,
                 "-u",
                 args.training_script,
-                "--local_rank={}".format(local_rank)
+                "--local_rank=0"
               ] \
             + args.training_script_args
 
@@ -123,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
